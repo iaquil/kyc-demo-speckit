@@ -1,36 +1,35 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: (unversioned template) → 1.0.0
-Type of bump: MAJOR — initial ratification; all placeholders replaced with concrete values.
+Version change: 1.0.0 → 2.0.0
+Type of bump: MAJOR — backward-incompatible redefinition; "Hexagonal Architecture (Ports and Adapters)"
+removed as an accepted architectural pattern. Clean Architecture is now the sole governing model.
 
-Modified principles: N/A (initial constitution — no prior principles existed)
+Modified principles:
+  I. Architecture-First:
+     - Removed: all occurrences of "Hexagonal Architecture (Ports and Adapters)" from introductory
+       paragraph and Backend section
+     - Added: Clean Architecture four-layer model (Domain, Application, Infrastructure, Interface/API)
+       with explicit layer responsibilities and the inward-dependency rule
 
 Added sections:
-  Core Principles:
-    I.  Architecture-First (Frontend, Backend, AWS Hosting)
-    II. Security by Design
-    III. Data Integrity & Isolation
-    IV. API-First (REST Standards, URI Versioning, Error Standard, Contracts)
-    V.  Test-Driven Quality (Backend, Frontend, CI, Specification-Driven)
-  Development Standards:
-    - Git Strategy (GitFlow)
-    - Code Quality (SOLID, DI, Separation of Concerns)
-    - Observability (structured logging, correlation IDs, CloudWatch)
-    - Documentation (OpenAPI, ADRs, mock examples)
-  Governance
+  Architecture-First > Backend > Clean Architecture Layers
+  Architecture-First > Backend > Layer Dependency Rule
 
-Removed sections: N/A
+Removed sections:
+  All references to "Hexagonal Architecture" and "Ports and Adapters"
 
 Templates reviewed:
   ✅ .specify/templates/plan-template.md
        "Constitution Check" gate references constitution dynamically — no update needed
   ✅ .specify/templates/spec-template.md
-       No constitution-specific mandatory sections missing — no update needed
+       No Hexagonal Architecture references found — no update needed
   ✅ .specify/templates/tasks-template.md
-       Task phases (logging, security, API, testing) align with constitution principles
+       No Hexagonal Architecture references found — no update needed
   ⚠  .specify/templates/commands/*.md — directory not present; skipped
-  ⚠  README.md — not present in repository; no runtime guidance docs to update
+  ⚠  README.md — not present at repository root; skipped
+  ✅ .specify/extensions/agent-context/README.md
+       No Hexagonal Architecture references found — no update needed
 
 Deferred items: None
 -->
@@ -42,10 +41,10 @@ Deferred items: None
 ### I. Architecture-First
 
 The system MUST be built as a React SPA frontend backed by a microservices API layer.
-All microservices MUST follow Hexagonal Architecture (Ports and Adapters) / Clean
-Architecture. Domain logic MUST remain independent of frameworks, databases, cloud SDKs,
-and transport protocols. Services MUST communicate exclusively through REST APIs.
-OpenAPI-first development is mandatory — the specification precedes implementation.
+All microservices MUST follow Clean Architecture. Domain logic MUST remain independent
+of frameworks, databases, cloud SDKs, and transport protocols. Services MUST communicate
+exclusively through REST APIs. OpenAPI-first development is mandatory — the specification
+precedes implementation.
 
 **Frontend**:
 
@@ -60,10 +59,25 @@ OpenAPI-first development is mandatory — the specification precedes implementa
 **Backend**:
 
 - Architecture SHALL be microservices-based
-- Each microservice SHALL follow Hexagonal Architecture (Ports and Adapters) / Clean Architecture
+- Each microservice SHALL follow Clean Architecture
 - Domain logic SHALL remain independent of frameworks, databases, cloud SDKs, and transport protocols
 - Services SHALL communicate through REST APIs
 - OpenAPI-first development is mandatory
+
+**Clean Architecture Layers**:
+
+- **Domain**: Core business entities and rules. No dependency on any outer layer, framework,
+  database, or transport. This is the innermost layer.
+- **Application**: Use cases and application services. Orchestrates domain objects to fulfill
+  business workflows. No framework or infrastructure dependencies permitted.
+- **Infrastructure**: Repositories, database adapters, cloud SDK clients, and external service
+  integrations. Implements interfaces defined by the Application layer.
+- **Interface / API**: HTTP controllers, REST handlers, and CLI entry points. Invokes Application
+  layer use cases. Contains no business logic.
+
+**Layer Dependency Rule**: Dependencies point inward only —
+Interface/API → Infrastructure → Application → Domain.
+The Domain layer MUST have zero outward dependencies.
 
 **AWS Hosting**:
 
@@ -144,7 +158,7 @@ tests and mock data are derived from specifications, not authored independently.
 
 **Backend Testing**:
 
-- Unit tests SHALL be mandatory for domain and application layers
+- Unit tests SHALL be mandatory for Domain and Application layers
 - Every API endpoint SHALL have a dedicated test suite
 - Endpoint tests SHALL use mocked repositories and mocked dependencies
 - Mock data fixtures SHALL be maintained for every endpoint
@@ -187,9 +201,9 @@ GitFlow is the mandatory branching strategy: `main`, `develop`, `feature/*`,
 ### Code Quality
 
 - SOLID principles SHALL be followed in all layers
-- Separation of concerns SHALL be enforced
+- Separation of concerns SHALL be enforced across all Clean Architecture layers
 - Dependency Injection SHALL be used
-- Business logic SHALL NOT exist in controllers
+- Business logic SHALL NOT exist in Interface/API layer controllers
 - Business logic SHALL NOT exist in React components
 - Reusable code SHALL be extracted into shared libraries where appropriate
 
@@ -229,4 +243,4 @@ It supersedes all other practices and guidelines where conflicts exist.
 - The Constitution Check gate in `plan.md` MUST pass before Phase 0 research begins
 - Complexity violations MUST be documented in the Complexity Tracking table of `plan.md`
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-17 | **Last Amended**: 2026-06-17
+**Version**: 2.0.0 | **Ratified**: 2026-06-17 | **Last Amended**: 2026-06-18
