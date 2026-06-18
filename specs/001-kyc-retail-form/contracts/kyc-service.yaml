@@ -1,0 +1,479 @@
+openapi: "3.1.0"
+
+info:
+  title: KYC Service API
+  description: |
+    Manages the KYC Application lifecycle for retail bank customers.
+    Applications progress through: draft → pending → under_review → approved | rejected.
+  version: "1.0.0"
+  contact:
+    name: KYC Platform Team
+
+servers:
+  - url: https://api.kyc-demo.example.com/api/v1
+    description: Production
+  - url: http://localhost:3001/api/v1
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: kyc-applications
+    description: KYC Application lifecycle operations
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApplicationStatus:
+      type: string
+      enum: [draft, pending, under_review, approved, rejected]
+      description: Current lifecycle status of the KYC application
+
+    KYCApplication:
+      type: object
+      required: [id, customerId, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        customerId:
+          type: string
+          example: "cognito-sub-abc123"
+        status:
+          $ref: "#/components/schemas/ApplicationStatus"
+        referenceNumber:
+          type: string
+          nullable: true
+          example: "KYC-20260617-000001"
+          description: Populated only after submission (status = pending)
+        fullLegalName:
+          type: string
+          nullable: true
+          maxLength: 255
+          example: "Jane Marie Smith"
+        dateOfBirth:
+          type: string
+          format: date
+          nullable: true
+          example: "1990-04-15"
+        homeAddress:
+          type: string
+          nullable: true
+          example: "123 Main Street, Springfield, IL 62701"
+        phoneNumber:
+          type: string
+          nullable: true
+          pattern: '^\d{3}-\d{3}-\d{4}$'
+          example: "312-555-0198"
+        documentId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Set after successful document upload via document-service
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-06-17T10:00:00.000Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2026-06-17T10:15:00.000Z"
+        submittedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-06-17T10:20:00.000Z"
+
+    CreateApplicationRequest:
+      type: object
+      description: |
+        Creates a new draft application. If the customer already has a draft, returns
+        the existing draft (idempotent). If a pending/under_review application exists,
+        returns 409.
+      properties: {}
+
+    UpdateApplicationRequest:
+      type: object
+      description: Partial update of draft application fields (auto-save progress)
+      properties:
+        fullLegalName:
+          type: string
+          maxLength: 255
+          example: "Jane Marie Smith"
+        dateOfBirth:
+          type: string
+          format: date
+          example: "1990-04-15"
+        ssn:
+          type: string
+          pattern: '^\d{3}-\d{2}-\d{4}$'
+          writeOnly: true
+          description: Raw SSN — encrypted server-side, never returned
+          example: "123-45-6789"
+        homeAddress:
+          type: string
+          example: "123 Main Street, Springfield, IL 62701"
+        phoneNumber:
+          type: string
+          nullable: true
+          pattern: '^\d{3}-\d{3}-\d{4}$'
+          example: "312-555-0198"
+        documentId:
+          type: string
+          format: uuid
+          description: Provided after successful document upload
+
+    SubmissionResult:
+      type: object
+      required: [applicationId, referenceNumber, status]
+      properties:
+        applicationId:
+          type: string
+          format: uuid
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        referenceNumber:
+          type: string
+          example: "KYC-20260617-000001"
+        status:
+          type: string
+          enum: [pending]
+          example: "pending"
+        message:
+          type: string
+          example: "Your KYC application has been received and is under review."
+
+    ApplicationListResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/KYCApplication"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    Pagination:
+      type: object
+      required: [page, limit, total, totalPages]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          example: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          example: 20
+        total:
+          type: integer
+          example: 1
+        totalPages:
+          type: integer
+          example: 1
+
+    ErrorResponse:
+      type: object
+      required: [code, message, correlationId]
+      properties:
+        code:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "Date of birth must indicate age >= 18"
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              issue:
+                type: string
+          example:
+            - field: "dateOfBirth"
+              issue: "AGE_BELOW_MINIMUM"
+        correlationId:
+          type: string
+          format: uuid
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+paths:
+  /kyc-applications:
+    get:
+      tags: [kyc-applications]
+      operationId: listApplications
+      summary: List KYC applications for the authenticated customer
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Paginated list of applications
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationListResponse"
+              example:
+                data:
+                  - id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                    customerId: "cognito-sub-abc123"
+                    status: "draft"
+                    referenceNumber: null
+                    fullLegalName: "Jane Marie Smith"
+                    dateOfBirth: "1990-04-15"
+                    homeAddress: "123 Main Street, Springfield, IL 62701"
+                    phoneNumber: "312-555-0198"
+                    documentId: null
+                    createdAt: "2026-06-17T10:00:00.000Z"
+                    updatedAt: "2026-06-17T10:15:00.000Z"
+                    submittedAt: null
+                pagination:
+                  page: 1
+                  limit: 20
+                  total: 1
+                  totalPages: 1
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "UNAUTHORIZED"
+                message: "Invalid or missing authorization token"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+    post:
+      tags: [kyc-applications]
+      operationId: createApplication
+      summary: |
+        Create a new draft KYC application. If a draft already exists for the customer,
+        returns the existing draft (201 with existing resource). Returns 409 if a
+        pending or under_review application already exists.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApplicationRequest"
+      responses:
+        "201":
+          description: Draft application created (or existing draft returned)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KYCApplication"
+              example:
+                id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                customerId: "cognito-sub-abc123"
+                status: "draft"
+                referenceNumber: null
+                fullLegalName: null
+                dateOfBirth: null
+                homeAddress: null
+                phoneNumber: null
+                documentId: null
+                createdAt: "2026-06-17T10:00:00.000Z"
+                updatedAt: "2026-06-17T10:00:00.000Z"
+                submittedAt: null
+        "409":
+          description: Active application already exists (pending or under_review)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "CONFLICT"
+                message: "An active KYC application already exists"
+                details:
+                  - field: "status"
+                    issue: "ACTIVE_APPLICATION_EXISTS"
+                    referenceNumber: "KYC-20260617-000001"
+                    applicationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+  /kyc-applications/active:
+    get:
+      tags: [kyc-applications]
+      operationId: getActiveApplication
+      summary: Get the authenticated customer's active application (any non-rejected status)
+      responses:
+        "200":
+          description: Active application found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KYCApplication"
+        "404":
+          description: No active application exists for this customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "NOT_FOUND"
+                message: "No active KYC application found"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+  /kyc-applications/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [kyc-applications]
+      operationId: getApplication
+      summary: Get a specific KYC application by ID
+      responses:
+        "200":
+          description: Application found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KYCApplication"
+        "403":
+          description: Application belongs to a different customer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      tags: [kyc-applications]
+      operationId: updateApplication
+      summary: Partially update a draft application (auto-save progress)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateApplicationRequest"
+            example:
+              fullLegalName: "Jane Marie Smith"
+              dateOfBirth: "1990-04-15"
+              ssn: "123-45-6789"
+              homeAddress: "123 Main Street, Springfield, IL 62701"
+              phoneNumber: "312-555-0198"
+      responses:
+        "200":
+          description: Draft updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KYCApplication"
+        "400":
+          description: Validation error (e.g., invalid SSN format, invalid phone format)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "VALIDATION_ERROR"
+                message: "SSN must match format XXX-XX-XXXX"
+                details:
+                  - field: "ssn"
+                    issue: "INVALID_FORMAT"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        "409":
+          description: Cannot update — application is not in draft status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      tags: [kyc-applications]
+      operationId: discardApplication
+      summary: Discard a draft application (customer chooses to start over)
+      responses:
+        "204":
+          description: Draft discarded successfully
+        "409":
+          description: Cannot discard — application is not in draft status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /kyc-applications/{id}/submissions:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      tags: [kyc-applications]
+      operationId: submitApplication
+      summary: |
+        Submit a draft application for review. Validates all required fields,
+        transitions status to pending, generates a reference number, and triggers
+        a confirmation notification.
+      responses:
+        "200":
+          description: Application submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmissionResult"
+              example:
+                applicationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                referenceNumber: "KYC-20260617-000001"
+                status: "pending"
+                message: "Your KYC application has been received and is under review."
+        "422":
+          description: |
+            Unprocessable — one or more required fields are missing or violate domain rules
+            (age < 18, missing document, invalid SSN)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "UNPROCESSABLE"
+                message: "Application cannot be submitted — required fields are missing"
+                details:
+                  - field: "documentId"
+                    issue: "DOCUMENT_REQUIRED"
+                  - field: "dateOfBirth"
+                    issue: "AGE_BELOW_MINIMUM"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        "409":
+          description: Application is not in draft status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
