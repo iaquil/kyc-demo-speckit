@@ -1,0 +1,244 @@
+openapi: "3.1.0"
+
+info:
+  title: Notification Service API
+  description: |
+    Internal service for dispatching KYC submission confirmation notifications.
+    Called exclusively by kyc-service after a successful application submission.
+    Notifications are sent via email to the address the bank has on file.
+    Idempotent: duplicate calls with the same applicationId + type are safe and return
+    the existing notification log record.
+  version: "1.0.0"
+  contact:
+    name: KYC Platform Team
+
+servers:
+  - url: http://notification-service:3003/api/v1
+    description: Internal (service-to-service)
+  - url: http://localhost:3003/api/v1
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: notifications
+    description: Confirmation notification dispatch and log
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    NotificationRequest:
+      type: object
+      required: [applicationId, notificationType, channel, recipient]
+      properties:
+        applicationId:
+          type: string
+          format: uuid
+          description: The submitted KYC application triggering this notification
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        notificationType:
+          type: string
+          enum: [submission_confirmation]
+          description: The type of notification to dispatch
+          example: "submission_confirmation"
+        channel:
+          type: string
+          enum: [email]
+          description: Delivery channel (email only for this feature; SMS is out of scope)
+          example: "email"
+        recipient:
+          type: string
+          description: Email address on file with the bank for this customer
+          example: "customer@example.com"
+        referenceNumber:
+          type: string
+          description: KYC application reference number to include in the email body
+          example: "KYC-20260617-000001"
+
+    NotificationLog:
+      type: object
+      required: [id, applicationId, notificationType, channel, recipient, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+        applicationId:
+          type: string
+          format: uuid
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        idempotencyKey:
+          type: string
+          description: "{applicationId}:{notificationType} — unique per application+type"
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6:submission_confirmation"
+        notificationType:
+          type: string
+          enum: [submission_confirmation]
+          example: "submission_confirmation"
+        channel:
+          type: string
+          enum: [email]
+          example: "email"
+        recipient:
+          type: string
+          example: "customer@example.com"
+        status:
+          type: string
+          enum: [pending, sent, failed]
+          example: "sent"
+        sentAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-06-17T10:21:00.000Z"
+        errorMessage:
+          type: string
+          nullable: true
+          description: Sanitized error description if status is failed; never contains PII
+          example: null
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-06-17T10:20:30.000Z"
+
+    ErrorResponse:
+      type: object
+      required: [code, message, correlationId]
+      properties:
+        code:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "applicationId is required"
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              issue:
+                type: string
+        correlationId:
+          type: string
+          format: uuid
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+paths:
+  /notifications:
+    post:
+      tags: [notifications]
+      operationId: sendNotification
+      summary: |
+        Dispatch a KYC confirmation notification. Creates a NotificationLog record,
+        sends the email via AWS SES, and updates the log status. Idempotent: if a
+        notification for the same applicationId + notificationType already exists,
+        returns the existing log record with HTTP 200.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationRequest"
+            example:
+              applicationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+              notificationType: "submission_confirmation"
+              channel: "email"
+              recipient: "customer@example.com"
+              referenceNumber: "KYC-20260617-000001"
+      responses:
+        "201":
+          description: Notification dispatched successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationLog"
+              example:
+                id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                applicationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                idempotencyKey: "3fa85f64-5717-4562-b3fc-2c963f66afa6:submission_confirmation"
+                notificationType: "submission_confirmation"
+                channel: "email"
+                recipient: "customer@example.com"
+                status: "sent"
+                sentAt: "2026-06-17T10:21:00.000Z"
+                errorMessage: null
+                createdAt: "2026-06-17T10:20:30.000Z"
+        "200":
+          description: Notification already sent (idempotent duplicate) — existing record returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationLog"
+              example:
+                id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+                applicationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                idempotencyKey: "3fa85f64-5717-4562-b3fc-2c963f66afa6:submission_confirmation"
+                notificationType: "submission_confirmation"
+                channel: "email"
+                recipient: "customer@example.com"
+                status: "sent"
+                sentAt: "2026-06-17T10:21:00.000Z"
+                errorMessage: null
+                createdAt: "2026-06-17T10:20:30.000Z"
+        "400":
+          description: Validation error — missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "VALIDATION_ERROR"
+                message: "applicationId is required"
+                details:
+                  - field: "applicationId"
+                    issue: "REQUIRED"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        "401":
+          description: Unauthorized — missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "UNAUTHORIZED"
+                message: "Invalid or missing authorization token"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+  /notifications/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [notifications]
+      operationId: getNotification
+      summary: Get a notification log record by ID (used for debugging and support)
+      responses:
+        "200":
+          description: Notification log record found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationLog"
+        "404":
+          description: Notification log not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "NOT_FOUND"
+                message: "Notification not found"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"

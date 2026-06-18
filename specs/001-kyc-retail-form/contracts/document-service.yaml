@@ -1,0 +1,370 @@
+openapi: "3.1.0"
+
+info:
+  title: Document Service API
+  description: |
+    Manages identity document uploads for KYC applications.
+    Accepted document types: US Driver's License and US Passport.
+    Max file size: 5 MB. Accepted formats: JPEG, PNG, PDF.
+    Upload flow: request presigned URL → upload directly to S3 → confirm upload.
+  version: "1.0.0"
+  contact:
+    name: KYC Platform Team
+
+servers:
+  - url: https://api.kyc-demo.example.com/api/v1
+    description: Production
+  - url: http://localhost:3002/api/v1
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: document-types
+    description: Accepted document type reference
+  - name: documents
+    description: Identity document upload and management
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    DocumentType:
+      type: object
+      required: [id, label, description]
+      properties:
+        id:
+          type: string
+          enum: [us_drivers_license, us_passport]
+          example: "us_drivers_license"
+        label:
+          type: string
+          example: "US Driver's License"
+        description:
+          type: string
+          example: "Driver's license issued by any US state or territory"
+
+    IdentityDocument:
+      type: object
+      required: [id, applicationId, documentType, fileName, fileSizeBytes, fileFormat, uploadStatus, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        applicationId:
+          type: string
+          format: uuid
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        documentType:
+          type: string
+          enum: [us_drivers_license, us_passport]
+          example: "us_drivers_license"
+        documentTypeLabel:
+          type: string
+          example: "US Driver's License"
+        fileName:
+          type: string
+          example: "license-scan.jpg"
+        fileSizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 5242880
+          example: 1048576
+        fileFormat:
+          type: string
+          enum: [jpeg, png, pdf]
+          example: "jpeg"
+        uploadStatus:
+          type: string
+          enum: [pending, uploaded, failed]
+          example: "uploaded"
+        uploadedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-06-17T10:18:00.000Z"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-06-17T10:17:30.000Z"
+
+    InitiateUploadRequest:
+      type: object
+      required: [applicationId, documentType, fileName, fileSizeBytes, fileFormat]
+      properties:
+        applicationId:
+          type: string
+          format: uuid
+          description: The KYC application this document belongs to
+          example: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        documentType:
+          type: string
+          enum: [us_drivers_license, us_passport]
+          description: Customer-declared document type (from UI selector)
+          example: "us_drivers_license"
+        fileName:
+          type: string
+          maxLength: 255
+          example: "license-scan.jpg"
+        fileSizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 5242880
+          description: File size in bytes; must not exceed 5 MB (5,242,880 bytes)
+          example: 1048576
+        fileFormat:
+          type: string
+          enum: [jpeg, png, pdf]
+          description: File format (must match actual MIME type of file)
+          example: "jpeg"
+
+    InitiateUploadResponse:
+      type: object
+      required: [documentId, presignedUrl, presignedUrlExpiresAt]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+          description: Document record ID (use this to confirm upload and link to application)
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        presignedUrl:
+          type: string
+          format: uri
+          description: |
+            S3 presigned PUT URL. Client must PUT the raw file bytes to this URL with the
+            correct Content-Type header. URL expires in 15 minutes.
+          example: "https://kyc-demo-documents.s3.amazonaws.com/documents/3fa8.../a1b2...?X-Amz-Signature=..."
+        presignedUrlExpiresAt:
+          type: string
+          format: date-time
+          example: "2026-06-17T10:32:30.000Z"
+
+    ConfirmUploadRequest:
+      type: object
+      description: |
+        Called by the frontend after the browser successfully PUTs the file to the presigned URL.
+        document-service verifies the object exists in S3 before confirming.
+      properties: {}
+
+    ErrorResponse:
+      type: object
+      required: [code, message, correlationId]
+      properties:
+        code:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "File size exceeds the 5 MB limit"
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              issue:
+                type: string
+          example:
+            - field: "fileSizeBytes"
+              issue: "EXCEEDS_MAX_SIZE"
+        correlationId:
+          type: string
+          format: uuid
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+
+paths:
+  /document-types:
+    get:
+      tags: [document-types]
+      operationId: listDocumentTypes
+      summary: List accepted document types (used to populate the UI selector)
+      responses:
+        "200":
+          description: List of accepted document types
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DocumentType"
+              example:
+                data:
+                  - id: "us_drivers_license"
+                    label: "US Driver's License"
+                    description: "Driver's license issued by any US state or territory"
+                  - id: "us_passport"
+                    label: "US Passport"
+                    description: "United States passport (standard or passport card)"
+
+  /documents:
+    post:
+      tags: [documents]
+      operationId: initiateUpload
+      summary: |
+        Initiate a document upload. Validates document type, file size, and format,
+        creates an identity document record (status: pending), and returns a presigned
+        S3 PUT URL. The client uploads the file directly to S3, then calls
+        POST /documents/{id}/upload-confirmations to confirm.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitiateUploadRequest"
+            example:
+              applicationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+              documentType: "us_drivers_license"
+              fileName: "license-scan.jpg"
+              fileSizeBytes: 1048576
+              fileFormat: "jpeg"
+      responses:
+        "201":
+          description: Upload initiated — presigned URL ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InitiateUploadResponse"
+        "400":
+          description: |
+            Validation error — invalid document type, file size exceeds 5 MB,
+            or unsupported file format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                fileTooLarge:
+                  summary: File exceeds 5 MB
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "File size exceeds the 5 MB limit"
+                    details:
+                      - field: "fileSizeBytes"
+                        issue: "EXCEEDS_MAX_SIZE"
+                        maxAllowed: 5242880
+                        provided: 6291456
+                    correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                unsupportedFormat:
+                  summary: Unsupported file format
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "File format is not supported. Accepted formats: JPEG, PNG, PDF"
+                    details:
+                      - field: "fileFormat"
+                        issue: "UNSUPPORTED_FORMAT"
+                        acceptedFormats: ["jpeg", "png", "pdf"]
+                    correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                invalidDocumentType:
+                  summary: Invalid document type
+                  value:
+                    code: "VALIDATION_ERROR"
+                    message: "Document type is not accepted. Only US Driver's License and US Passport are accepted."
+                    details:
+                      - field: "documentType"
+                        issue: "INVALID_DOCUMENT_TYPE"
+                        acceptedTypes: ["us_drivers_license", "us_passport"]
+                    correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /documents/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [documents]
+      operationId: getDocument
+      summary: Get document metadata by ID
+      responses:
+        "200":
+          description: Document found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityDocument"
+              example:
+                id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                applicationId: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                documentType: "us_drivers_license"
+                documentTypeLabel: "US Driver's License"
+                fileName: "license-scan.jpg"
+                fileSizeBytes: 1048576
+                fileFormat: "jpeg"
+                uploadStatus: "uploaded"
+                uploadedAt: "2026-06-17T10:18:00.000Z"
+                createdAt: "2026-06-17T10:17:30.000Z"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /documents/{id}/upload-confirmations:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      tags: [documents]
+      operationId: confirmUpload
+      summary: |
+        Confirm that the client has successfully uploaded the file to S3.
+        document-service verifies the object exists in S3 (HeadObject) and updates
+        upload_status to 'uploaded'. Returns the updated document record.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmUploadRequest"
+      responses:
+        "200":
+          description: Upload confirmed — document status updated to uploaded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityDocument"
+        "422":
+          description: S3 object not found — upload may have failed or not completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "UNPROCESSABLE"
+                message: "Document file not found in storage. Please re-upload."
+                details:
+                  - field: "s3Key"
+                    issue: "OBJECT_NOT_FOUND"
+                correlationId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        "409":
+          description: Upload already confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
